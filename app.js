@@ -675,9 +675,10 @@ let currentWindow = null;
 function zoomOptions(len) {
   const sync = ({ chart }) => syncWindowFrom(chart);
   return {
-    pan: { enabled: true, mode: "x", threshold: 5, onPan: sync, onPanComplete: sync },
+    // タッチ端末では独自のスワイプ処理（bindTouchPan）を使うため、プラグイン側の指操作は無効
+    pan: { enabled: !isTouchDevice(), mode: "x", threshold: 5, onPan: sync, onPanComplete: sync },
     zoom: {
-      pinch: { enabled: true },
+      pinch: { enabled: false },
       wheel: { enabled: true, modifierKey: "ctrl" }, // PCは Ctrl+ホイールでズーム
       mode: "x",
       onZoom: sync,
@@ -699,20 +700,106 @@ function syncWindowFrom(chart) {
   updateWindowLabel();
 }
 
-function setWindow(min, max) {
+function setWindow(min, max, instant = false) {
   const len = lastRender?.series.length || 0;
   if (!len) return;
-  const span = max - min;
-  if (min < 0) { min = 0; max = Math.min(len - 1, span); }
+  min = Math.round(min);
+  max = Math.round(max);
+  const span = Math.min(max - min, len - 1);
+  if (min < 0) { min = 0; max = span; }
   if (max > len - 1) { max = len - 1; min = Math.max(0, max - span); }
+  if (currentWindow && currentWindow.min === min && currentWindow.max === max && instant) return;
   currentWindow = { min, max };
   [weatherChart, pollenChart].forEach((c) => {
     if (!c) return;
     c.options.scales.x.min = min;
     c.options.scales.x.max = max;
-    c.update();
+    c.update(instant ? "none" : undefined);
   });
   updateWindowLabel();
+}
+
+function isTouchDevice() {
+  return window.matchMedia("(pointer: coarse)").matches || navigator.maxTouchPoints > 0;
+}
+
+// スマホ：1本指の横スライドで移動、2本指でズーム。縦方向はそのままページスクロール
+function bindTouchPan(canvas, getChart) {
+  if (!canvas || canvas.__touchPanBound) return;
+  canvas.__touchPanBound = true;
+  let st = null;
+  const dist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+
+  canvas.addEventListener("touchstart", (e) => {
+    if (!currentWindow) return;
+    const chart = getChart();
+    if (!chart) return;
+    const area = chart.chartArea;
+    const rect = canvas.getBoundingClientRect();
+    const base = { win: { ...currentWindow }, width: Math.max(1, area.right - area.left), left: rect.left + area.left };
+    if (e.touches.length === 1) {
+      st = { ...base, mode: null, x0: e.touches[0].clientX, y0: e.touches[0].clientY };
+    } else if (e.touches.length === 2) {
+      const cx = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+      st = { ...base, mode: "pinch", d0: dist(e.touches), frac: Math.min(1, Math.max(0, (cx - base.left) / base.width)) };
+    }
+  }, { passive: true });
+
+  canvas.addEventListener("touchmove", (e) => {
+    if (!st) return;
+    const len = lastRender?.series.length || 0;
+    const span = st.win.max - st.win.min;
+    if (st.mode === "pinch" && e.touches.length === 2) {
+      e.preventDefault();
+      const newSpan = Math.min(len - 1, Math.max(6, span * (st.d0 / Math.max(1, dist(e.touches)))));
+      const anchor = st.win.min + span * st.frac;
+      setWindow(anchor - newSpan * st.frac, anchor - newSpan * st.frac + newSpan, true);
+      return;
+    }
+    if (e.touches.length !== 1) return;
+    const dx = e.touches[0].clientX - st.x0;
+    const dy = e.touches[0].clientY - st.y0;
+    if (!st.mode) {
+      if (Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy)) st.mode = "pan";
+      else if (Math.abs(dy) > 8) st.mode = "scroll";
+    }
+    if (st.mode !== "pan") return;
+    e.preventDefault();
+    const shiftH = (-dx / st.width) * span;
+    setWindow(st.win.min + shiftH, st.win.max + shiftH, true);
+  }, { passive: false });
+
+  const end = (e) => { if (!e.touches.length) st = null; };
+  canvas.addEventListener("touchend", end);
+  canvas.addEventListener("touchcancel", end);
+}
+
+// スマホ用：ツールチップをグラフに重ねず、グラフ下の欄に表示する
+function detailTooltip(elId) {
+  return ({ tooltip }) => {
+    const el = document.getElementById(elId);
+    if (!el || tooltip.opacity === 0 || !tooltip.dataPoints?.length) return;
+    const esc = (t) => String(t).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+    const lines = [];
+    (tooltip.title || []).forEach((t) => lines.push(`<b>${esc(t)}</b>`));
+    tooltip.body.forEach((b, i) => {
+      const col = tooltip.labelColors[i]?.borderColor;
+      const c = typeof col === "string" ? col : tooltip.labelColors[i]?.backgroundColor;
+      b.lines.forEach((l) => lines.push(`<i style="background:${c}"></i>${esc(l)}`));
+    });
+    (tooltip.afterBody || []).forEach((t) => lines.push(esc(t)));
+    el.innerHTML = lines.join("<br>");
+  };
+}
+
+function tooltipMode(elId) {
+  const el = document.getElementById(elId);
+  const mobile = isMobile();
+  if (el) {
+    el.hidden = !mobile;
+    if (mobile && !el.innerHTML) el.textContent = "👆 グラフをタップすると、その時刻の詳細がここに表示されます";
+  }
+  return mobile ? { enabled: false, external: detailTooltip(elId) } : { enabled: true };
 }
 
 function defaultWindow(len, nowIdx) {
@@ -806,6 +893,7 @@ function renderCharts(series, relativeNowIdx, keepWindow = false) {
         riskBands: { series, nowIdx: relativeNowIdx, blockHours },
         zoom: zoomOptions(series.length),
         tooltip: {
+          ...tooltipMode("weatherDetail"),
           callbacks: {
             afterBody(items) {
               const p = series[items[0].dataIndex];
@@ -873,6 +961,7 @@ function renderCharts(series, relativeNowIdx, keepWindow = false) {
         pollenFaces: { series, activeKeys },
         zoom: zoomOptions(series.length),
         tooltip: {
+          ...tooltipMode("pollenDetail"),
           callbacks: {
             // 割合ではなく各種類の実際の指数を表示
             label(item) {
@@ -906,6 +995,8 @@ function renderCharts(series, relativeNowIdx, keepWindow = false) {
   [weatherChart, pollenChart].forEach((c) => {
     if (c?.canvas) c.canvas.style.touchAction = "pan-y";
   });
+  bindTouchPan(weatherChart?.canvas, () => weatherChart);
+  bindTouchPan(pollenChart?.canvas, () => pollenChart);
 
   updateWindowLabel();
 }

@@ -211,6 +211,27 @@
 
     .chart-box canvas { touch-action: pan-y; }
 
+    /* スマホではツールチップをグラフに重ねず、グラフの下に詳細を表示 */
+    .chart-detail {
+      margin-top: 8px;
+      padding: 8px 10px;
+      min-height: 3.2em;
+      border-radius: 8px;
+      background: #0f172a;
+      font-size: 0.8rem;
+      line-height: 1.5;
+      color: var(--muted);
+    }
+    .chart-detail b { color: #e2e8f0; }
+    .chart-detail i {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      margin-right: 5px;
+      border-radius: 2px;
+      vertical-align: middle;
+    }
+
     .chart-box.pollen {
       height: 320px;
     }
@@ -410,6 +431,7 @@
       <div class="chart-box">
         <canvas id="weatherChart"></canvas>
       </div>
+      <div class="chart-detail" id="weatherDetail" hidden></div>
       <div class="band-legend">
         <span><i style="background: rgba(234, 179, 8, 0.45);"></i>注意（リスク30以上）</span>
         <span><i style="background: rgba(239, 68, 68, 0.6);"></i>警戒（リスク60以上）</span>
@@ -428,6 +450,7 @@
       <div class="chart-box pollen">
         <canvas id="pollenChart"></canvas>
       </div>
+      <div class="chart-detail" id="pollenDetail" hidden></div>
       <div id="pollenNote" style="margin-top: 8px; font-size: 0.8rem; color: var(--muted);"></div>
     </section>
 
