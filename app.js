@@ -794,7 +794,8 @@ function detailTooltip(elId) {
 
 function tooltipMode(elId) {
   const el = document.getElementById(elId);
-  const mobile = isMobile();
+  // 画面幅に関係なく、タッチ操作の端末（スマホ・タブレット・横向き）ではグラフ下に表示
+  const mobile = isMobile() || isTouchDevice();
   if (el) {
     el.hidden = !mobile;
     if (mobile && !el.innerHTML) el.textContent = "👆 グラフをタップすると、その時刻の詳細がここに表示されます";
